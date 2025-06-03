@@ -1,0 +1,10 @@
+1	1	L	L	L	2	I	I	I	I
+I	1	L	4	4	2	S	3	6	3
+I	1	S	S	4	2	S	S	L	L
+I	S	S	7	7	7	7	S	5	L
+I	1	1	7	S	7	7	8	6	L
+L	L	L	S	S	7	7	8	8	I
+L	10	10	S	7	7	7	S	S	I
+9	L	12	T	13	11	S	S	8	I
+9	L	T	T	S	S	13	L	14	I
+L	L	12	T	13	S	S	L	L	L
