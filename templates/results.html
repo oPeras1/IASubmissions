@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <title>Resultados dos Testes</title>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code&display=swap" rel="stylesheet">
+  <style>
+    body {
+      background-color: #0d0d0d;
+      color: #eaeaea;
+      font-family: 'Fira Code', monospace;
+      margin: 0;
+      padding: 1rem;
+    }
+    h1 {
+      text-align: center;
+      color: #00ffaa;
+    }
+    #output {
+      background-color: #1a1a1a;
+      border: 1px solid #333;
+      padding: 1rem;
+      border-radius: 10px;
+      max-width: 800px;
+      margin: 2rem auto;
+      white-space: pre-wrap;
+      overflow-x: auto;
+      box-shadow: 0 0 10px rgba(0, 255, 200, 0.1);
+    }
+    .status-pass { color: #00ff88; }
+    .status-fail { color: #ff4d4d; }
+    .status-timeout { color: #ffaa00; }
+    .status-error { color: #ff66cc; }
+    .status-info { color: #888; }
+  </style>
+</head>
+<body>
+  <h1>📋 Resultados dos Testes</h1>
+  <div id="output"></div>
+
+  <script>
+    const fileId = "{{ file_id }}";
+    const output = document.getElementById('output');
+    const source = new EventSource("/stream/" + fileId);
+
+    source.onmessage = function(event) {
+      const line = document.createElement("div");
+
+      if (event.data.includes("✅")) line.classList.add("status-pass");
+      else if (event.data.includes("❌")) line.classList.add("status-fail");
+      else if (event.data.includes("⏱️")) line.classList.add("status-timeout");
+      else if (event.data.includes("💥")) line.classList.add("status-error");
+      else line.classList.add("status-info");
+
+      line.textContent = event.data;
+      output.appendChild(line);
+      window.scrollTo(0, document.body.scrollHeight);
+    };
+
+    source.onerror = function() {
+      source.close();
+    };
+  </script>
+</body>
+</html>
