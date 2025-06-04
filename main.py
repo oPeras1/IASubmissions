@@ -177,7 +177,7 @@ def run_tests(file_id, script_path, sandbox_dir):
             append_stream(file_id, f"[{test_name}] ❌ Output esperado não encontrado: {output_path}")
             continue
 
-        timeout = timeout_map.get(test_name, 2000)
+        timeout = timeout_map.get(test_name, 60)
         append_stream(file_id, f"[{test_name}] Em execução com timeout={timeout}s...")
 
         try:
