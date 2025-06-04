@@ -152,6 +152,7 @@ def run_tests(file_id, script_path, sandbox_dir):
                 expected_output = f.read()
 
             # Executa o script dentro da sandbox (sandbox_dir)
+            start_time = time.perf_counter()
             proc = subprocess.run(
                 ["python3", os.path.basename(script_path)],
                 cwd=sandbox_dir,
@@ -162,6 +163,7 @@ def run_tests(file_id, script_path, sandbox_dir):
                 text=True,
                 shell=False
             )
+            elapsed = time.perf_counter() - start_time
 
             real_out_file = os.path.join(sandbox_dir, f"real_out.txt")
             exp_out_file = os.path.join(sandbox_dir, f"exp_out.txt")
@@ -172,14 +174,12 @@ def run_tests(file_id, script_path, sandbox_dir):
                 f.write(expected_output)
 
             # Usa diff para comparar resultados
-            start_time = time.perf_counter()
             diff_result = subprocess.run(
                 ["/usr/bin/diff", "--strip-trailing-cr", real_out_file, exp_out_file],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
             )
-            elapsed = time.perf_counter() - start_time
 
             conn = sqlite3.connect('stats.db')
             cursor = conn.cursor()
