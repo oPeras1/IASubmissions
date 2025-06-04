@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <title>Estatísticas dos Testes</title>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code&display=swap" rel="stylesheet">
+  <style>
+    body {
+      background-color: #111;
+      color: #eee;
+      font-family: 'Fira Code', monospace;
+      padding: 2rem;
+      margin: 0;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .stats-box {
+      background-color: #1e1e1e;
+      border: 1px solid #333;
+      padding: 1.5rem;
+      border-radius: 12px;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 0 12px rgba(0, 255, 255, 0.1);
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+    .stat-item {
+      background-color: #2a2a2a;
+      padding: 1rem;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .stat-number {
+      font-size: 2rem;
+      font-weight: bold;
+      color: #00aaff;
+    }
+    .stat-label {
+      font-size: 0.9rem;
+      color: #bbb;
+    }
+    .back-link {
+      color: #00aaff;
+      text-decoration: none;
+      margin-bottom: 2rem;
+      display: inline-block;
+    }
+    .back-link:hover {
+      text-decoration: underline;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+    }
+    th, td {
+      padding: 0.5rem;
+      text-align: left;
+      border-bottom: 1px solid #333;
+    }
+    th {
+      background-color: #2a2a2a;
+      color: #00aaff;
+    }
+    .status-passed { color: #4ade80; }
+    .status-failed { color: #ef4444; }
+    .status-timeout { color: #f59e0b; }
+    .status-error { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a href="/" class="back-link">← Voltar ao início</a>
+    
+    <h1>📊 Estatísticas dos Testes</h1>
+    
+    <div class="stats-box">
+      <h2>Resumo Geral</h2>
+      <div class="stat-grid">
+        <div class="stat-item">
+          <div class="stat-number">{{ total_submissions }}</div>
+          <div class="stat-label">Total Submissões</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-number status-passed">{{ status_counts.get('PASSED', 0) }}</div>
+          <div class="stat-label">Testes Passou</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-number status-failed">{{ status_counts.get('FAILED', 0) }}</div>
+          <div class="stat-label">Testes Falharam</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-number status-timeout">{{ status_counts.get('TIMEOUT', 0) }}</div>
+          <div class="stat-label">Timeouts</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-number status-error">{{ status_counts.get('ERROR', 0) }}</div>
+          <div class="stat-label">Erros</div>
+        </div>
+      </div>
+    </div>
+
+    {% set total_tests = status_counts.get('PASSED', 0) + status_counts.get('FAILED', 0) + status_counts.get('TIMEOUT', 0) + status_counts.get('ERROR', 0) %}
+    {% if total_tests > 0 %}
+    <div class="stats-box">
+      <h2>Taxa de Sucesso</h2>
+      <div class="stat-grid">
+        <div class="stat-item">
+          <div class="stat-number status-passed">{{ "%.1f"|format((status_counts.get('PASSED', 0) / total_tests * 100)) }}%</div>
+          <div class="stat-label">Taxa de Aprovação</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-number status-timeout">{{ "%.1f"|format((status_counts.get('TIMEOUT', 0) / total_tests * 100)) }}%</div>
+          <div class="stat-label">Taxa de Timeout</div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if avg_times %}
+    <div class="stats-box">
+      <h2>Tempo Médio por Teste (só aprovados)</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Teste</th>
+            <th>Tempo Médio (s)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for test_name, avg_time in avg_times %}
+          <tr>
+            <td>{{ test_name }}</td>
+            <td>{{ "%.3f"|format(avg_time) }}s</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    <div class="stats-box">
+      <h2>Informações Interessantes</h2>
+      <ul style="list-style: none; padding: 0;">
+        {% if status_counts.get('PASSED', 0) > 0 %}
+        <li>🏆 {{ status_counts.get('PASSED', 0) }} testes foram aprovados com sucesso</li>
+        {% endif %}
+        {% if status_counts.get('TIMEOUT', 0) > 0 %}
+        <li>⏱️ {{ status_counts.get('TIMEOUT', 0) }} submissões excederam o tempo limite</li>
+        {% endif %}
+        {% if avg_times %}
+        <li>⚡ Teste mais rápido em média: {{ avg_times|min(attribute=1)|first }} ({{ "%.3f"|format(avg_times|min(attribute=1)|last) }}s)</li>
+        <li>🐌 Teste mais lento em média: {{ avg_times|max(attribute=1)|first }} ({{ "%.3f"|format(avg_times|max(attribute=1)|last) }}s)</li>
+        {% endif %}
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

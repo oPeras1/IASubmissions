@@ -8,6 +8,8 @@ import glob
 import json
 import shutil
 import ast
+import sqlite3
+from datetime import datetime
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
@@ -15,6 +17,24 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 streams_lock = threading.Lock()
 streams = {}
+
+# Adicionar após a criação do UPLOAD_FOLDER
+def init_db():
+    conn = sqlite3.connect('stats.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS test_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_name TEXT,
+            status TEXT,
+            execution_time REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
 
 def append_stream(file_id, msg):
     with streams_lock:
@@ -161,20 +181,44 @@ def run_tests(file_id, script_path, sandbox_dir):
             )
             elapsed = time.perf_counter() - start_time
 
+            conn = sqlite3.connect('stats.db')
+            cursor = conn.cursor()
+
             if diff_result.returncode == 0:
                 streams[file_id].append(f"[{test_name}] ✅ PASSOU em {elapsed:.5f}s")
+                cursor.execute("INSERT INTO test_results (test_name, status, execution_time) VALUES (?, ?, ?)",
+                             (test_name, 'PASSED', elapsed))
             else:
                 streams[file_id].append(f"[{test_name}] ❌ FALHOU")
                 streams[file_id].append("Diferença:")
                 streams[file_id].extend(diff_result.stdout.splitlines())
+                cursor.execute("INSERT INTO test_results (test_name, status, execution_time) VALUES (?, ?, ?)",
+                             (test_name, 'FAILED', elapsed))
+
+            conn.commit()
+            conn.close()
 
             os.remove(real_out_file)
             os.remove(exp_out_file)
 
         except subprocess.TimeoutExpired:
             streams[file_id].append(f"[{test_name}] ⏱️ Timeout após {timeout}s")
+
+            conn = sqlite3.connect('stats.db')
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO test_results (test_name, status, execution_time) VALUES (?, ?, ?)",
+                         (test_name, 'TIMEOUT', timeout))
+            conn.commit()
+            conn.close()
         except Exception as e:
             streams[file_id].append(f"[{test_name}] 💥 Erro: {e}")
+
+            conn = sqlite3.connect('stats.db')
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO test_results (test_name, status, execution_time) VALUES (?, ?, ?)",
+                         (test_name, 'ERROR', 0))
+            conn.commit()
+            conn.close()
 
         time.sleep(0.5)
 
@@ -187,6 +231,29 @@ def run_tests(file_id, script_path, sandbox_dir):
     if os.path.exists(sandbox_dir):
         shutil.rmtree(sandbox_dir)
 
+@app.route('/stats')
+def stats():
+    conn = sqlite3.connect('stats.db')
+    cursor = conn.cursor()
+    
+    # Estatísticas gerais
+    cursor.execute("SELECT status, COUNT(*) FROM test_results GROUP BY status")
+    status_counts = dict(cursor.fetchall())
+    
+    # Tempo médio por teste
+    cursor.execute("SELECT test_name, AVG(execution_time) FROM test_results WHERE status='PASSED' GROUP BY test_name")
+    avg_times = cursor.fetchall()
+    
+    # Total de submissões
+    cursor.execute("SELECT COUNT(DISTINCT timestamp) FROM test_results")
+    total_submissions = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    return render_template('stats.html', 
+                         status_counts=status_counts,
+                         avg_times=avg_times,
+                         total_submissions=total_submissions)
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
