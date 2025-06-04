@@ -20,7 +20,7 @@ def append_stream(file_id, msg):
     with streams_lock:
         if file_id not in streams:
             streams[file_id] = []
-        append_stream(file_id, msg)
+        streams[file_id].append(msg)  # ← This should append to the list
 
 app.config['MAX_CONTENT_LENGTH'] = 102400  # bytes
 
@@ -152,15 +152,17 @@ def run_tests(file_id, script_path, sandbox_dir):
                 f.write(expected_output)
 
             # Usa diff para comparar resultados
+            start_time = time.perf_counter()
             diff_result = subprocess.run(
                 ["diff", "--strip-trailing-cr", real_out_file, exp_out_file],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
             )
+            elapsed = time.perf_counter() - start_time
 
             if diff_result.returncode == 0:
-                streams[file_id].append(f"[{test_name}] ✅ PASSOU")
+                streams[file_id].append(f"[{test_name}] ✅ PASSOU em {elapsed:.5f}s")
             else:
                 streams[file_id].append(f"[{test_name}] ❌ FALHOU")
                 streams[file_id].append("Diferença:")
