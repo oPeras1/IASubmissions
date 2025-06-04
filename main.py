@@ -154,7 +154,7 @@ def run_tests(file_id, script_path, sandbox_dir):
             # Usa diff para comparar resultados
             start_time = time.perf_counter()
             diff_result = subprocess.run(
-                ["diff", "--strip-trailing-cr", real_out_file, exp_out_file],
+                ["/usr/bin/diff", "--strip-trailing-cr", real_out_file, exp_out_file],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
