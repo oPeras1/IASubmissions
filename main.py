@@ -10,6 +10,8 @@ import shutil
 import ast
 import sqlite3
 from datetime import datetime
+import resource
+
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
@@ -117,6 +119,10 @@ def stream(file_id):
             last_index += len(updates)
     return Response(event_stream(), content_type='text/event-stream')
 
+def limit_memory():
+    mem_bytes = 48 * 1024 * 1024 * 1024  # 16 GB
+    resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+
 def run_tests(file_id, script_path, sandbox_dir):
     try:
         with open("tests/timeouts.json", "r") as f:
@@ -141,7 +147,7 @@ def run_tests(file_id, script_path, sandbox_dir):
             streams[file_id].append(f"[{test_name}] ❌ Output esperado não encontrado: {output_path}")
             continue
 
-        timeout = timeout_map.get(test_name, 2)
+        timeout = timeout_map.get(test_name, 2000)
 
         streams[file_id].append(f"[{test_name}] Em execução com timeout={timeout}s...")
 
@@ -161,7 +167,8 @@ def run_tests(file_id, script_path, sandbox_dir):
                 stderr=subprocess.STDOUT,
                 timeout=timeout,
                 text=True,
-                shell=False
+                shell=False,
+                preexec_fn=limit_memory
             )
             elapsed = time.perf_counter() - start_time
 
