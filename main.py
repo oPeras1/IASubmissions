@@ -11,16 +11,20 @@ import ast
 import sqlite3
 from datetime import datetime
 import resource
-
+import redis
+import pickle
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-streams_lock = threading.Lock()
-streams = {}
+# Redis connection for shared state across workers
+redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
 
-# Adicionar após a criação do UPLOAD_FOLDER
+# Remove the in-memory streams dictionary and lock
+# streams_lock = threading.Lock()  # Not needed anymore
+# streams = {}  # Not needed anymore
+
 def init_db():
     conn = sqlite3.connect('stats.db')
     cursor = conn.cursor()
@@ -39,10 +43,24 @@ def init_db():
 init_db()
 
 def append_stream(file_id, msg):
-    with streams_lock:
-        if file_id not in streams:
-            streams[file_id] = []
-        streams[file_id].append(msg)  # ← This should append to the list
+    """Append message to Redis list for the given file_id"""
+    key = f"stream:{file_id}"
+    redis_client.lpush(key, msg)
+    # Set expiration to clean up old data (24 hours)
+    redis_client.expire(key, 86400)
+
+def get_stream_messages(file_id, start_index=0):
+    """Get messages from Redis list starting from start_index"""
+    key = f"stream:{file_id}"
+    # Get all messages and reverse to maintain chronological order
+    messages = redis_client.lrange(key, 0, -1)
+    messages.reverse()  # Redis LPUSH adds to front, so reverse for chronological order
+    
+    # Convert bytes to strings
+    messages = [msg.decode('utf-8') for msg in messages]
+    
+    # Return messages from start_index onwards
+    return messages[start_index:]
 
 app.config['MAX_CONTENT_LENGTH'] = 102400  # bytes
 
@@ -53,7 +71,7 @@ def is_script_safe(code):
     try:
         tree = ast.parse(code)
     except SyntaxError:
-        return False  # código inválido não é seguro
+        return False
     
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -66,22 +84,19 @@ def is_script_safe(code):
         elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id in DANGEROUS_FUNCTIONS:
                 return False
-            elif isinstance(node.func, ast.Attribute):
+            elif isinstance(node, ast.Attribute):
                 if node.func.attr in DANGEROUS_FUNCTIONS or node.func.attr in DANGEROUS_MODULES:
                     return False
     return True
-
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-
 @app.route('/upload', methods=['POST'])
 def upload():
     file = request.files['file']
 
-    # Ler conteúdo e verificar segurança
     content = file.read().decode('utf-8', errors='ignore')
     if not is_script_safe(content):
         return "❌ O ficheiro contém código potencialmente perigoso.", 400
@@ -98,7 +113,9 @@ def upload():
     for dep in ["search.py", "utils.py"]:
         shutil.copy(os.path.join("dependencies", dep), sandbox_dir)
 
-    streams[file_id] = []
+    # Initialize the stream in Redis
+    append_stream(file_id, "Iniciando testes...")
+    
     threading.Thread(target=run_tests, args=(file_id, script_path, sandbox_dir), daemon=True).start()
 
     return redirect(url_for('results', file_id=file_id))
@@ -112,44 +129,56 @@ def stream(file_id):
     def event_stream():
         last_index = 0
         while True:
-            gevent.sleep(1)
-            updates = streams.get(file_id, [])[last_index:]
-            for update in updates:
-                yield f"data: {update}\n\n"
-            last_index += len(updates)
+            try:
+                # Get new messages from Redis
+                updates = get_stream_messages(file_id, last_index)
+                for update in updates:
+                    yield f"data: {update}\n\n"
+                last_index += len(updates)
+                
+                # Check if tests are completed
+                if updates and "=== Testes Concluídos ===" in updates:
+                    break
+                    
+                time.sleep(1)  # Use time.sleep instead of gevent.sleep
+            except Exception as e:
+                yield f"data: Erro na stream: {str(e)}\n\n"
+                break
+    
     return Response(event_stream(), content_type='text/event-stream')
 
 def limit_memory():
-    mem_bytes = 48 * 1024 * 1024 * 1024  # 16 GB
+    mem_bytes = 10 * 1024 * 1024 * 1024  # 10 GB limit for user scripts
     resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+    # Also limit RSS (physical memory) if available
+    try:
+        resource.setrlimit(resource.RLIMIT_RSS, (mem_bytes, mem_bytes))
+    except (AttributeError, OSError):
+        pass  # RLIMIT_RSS not available on all systems
 
 def run_tests(file_id, script_path, sandbox_dir):
     try:
         with open("tests/timeouts.json", "r") as f:
             timeout_map = json.load(f)
     except Exception as e:
-        streams[file_id].append(f"⚠️ Erro ao carregar timeouts.json: {e}")
+        append_stream(file_id, f"⚠️ Erro ao carregar timeouts.json: {e}")
         return
 
     test_files = sorted(glob.glob("tests/test*.txt"))
     if not test_files:
-        streams[file_id].append("⚠️ Nenhum teste encontrado na pasta 'tests'.")
+        append_stream(file_id, "⚠️ Nenhum teste encontrado na pasta 'tests'.")
         return
 
-    # Copiar as dependências já feitas na upload, então não precisa copiar aqui
-
-    # Executar cada teste
     for input_path in test_files:
         test_name = os.path.basename(input_path).replace(".txt", "")
         output_path = input_path.replace(".txt", ".out")
 
         if not os.path.exists(output_path):
-            streams[file_id].append(f"[{test_name}] ❌ Output esperado não encontrado: {output_path}")
+            append_stream(file_id, f"[{test_name}] ❌ Output esperado não encontrado: {output_path}")
             continue
 
         timeout = timeout_map.get(test_name, 2000)
-
-        streams[file_id].append(f"[{test_name}] Em execução com timeout={timeout}s...")
+        append_stream(file_id, f"[{test_name}] Em execução com timeout={timeout}s...")
 
         try:
             with open(input_path, "r") as f:
@@ -157,7 +186,6 @@ def run_tests(file_id, script_path, sandbox_dir):
             with open(output_path, "r") as f:
                 expected_output = f.read()
 
-            # Executa o script dentro da sandbox (sandbox_dir)
             start_time = time.perf_counter()
             proc = subprocess.run(
                 ["python3", os.path.basename(script_path)],
@@ -180,7 +208,6 @@ def run_tests(file_id, script_path, sandbox_dir):
             with open(exp_out_file, "w") as f:
                 f.write(expected_output)
 
-            # Usa diff para comparar resultados
             diff_result = subprocess.run(
                 ["/usr/bin/diff", "-w", "--strip-trailing-cr", real_out_file, exp_out_file],
                 stdout=subprocess.PIPE,
@@ -192,13 +219,14 @@ def run_tests(file_id, script_path, sandbox_dir):
             cursor = conn.cursor()
 
             if diff_result.returncode == 0:
-                streams[file_id].append(f"[{test_name}] ✅ PASSOU em {elapsed:.5f}s")
+                append_stream(file_id, f"[{test_name}] ✅ PASSOU em {elapsed:.5f}s")
                 cursor.execute("INSERT INTO test_results (test_name, status, execution_time) VALUES (?, ?, ?)",
                              (test_name, 'PASSED', elapsed))
             else:
-                streams[file_id].append(f"[{test_name}] ❌ FALHOU")
-                streams[file_id].append("Diferença:")
-                streams[file_id].extend(diff_result.stdout.splitlines())
+                append_stream(file_id, f"[{test_name}] ❌ FALHOU")
+                append_stream(file_id, "Diferença:")
+                for line in diff_result.stdout.splitlines():
+                    append_stream(file_id, line)
                 cursor.execute("INSERT INTO test_results (test_name, status, execution_time) VALUES (?, ?, ?)",
                              (test_name, 'FAILED', elapsed))
 
@@ -209,7 +237,7 @@ def run_tests(file_id, script_path, sandbox_dir):
             os.remove(exp_out_file)
 
         except subprocess.TimeoutExpired:
-            streams[file_id].append(f"[{test_name}] ⏱️ Timeout após {timeout}s")
+            append_stream(file_id, f"[{test_name}] ⏱️ Timeout após {timeout}s")
 
             conn = sqlite3.connect('stats.db')
             cursor = conn.cursor()
@@ -218,7 +246,7 @@ def run_tests(file_id, script_path, sandbox_dir):
             conn.commit()
             conn.close()
         except Exception as e:
-            streams[file_id].append(f"[{test_name}] 💥 Erro: {e}")
+            append_stream(file_id, f"[{test_name}] 💥 Erro: {e}")
 
             conn = sqlite3.connect('stats.db')
             cursor = conn.cursor()
@@ -227,14 +255,13 @@ def run_tests(file_id, script_path, sandbox_dir):
             conn.commit()
             conn.close()
 
-        gevent.sleep(0.5)
+        time.sleep(0.5)
 
-    streams[file_id].append("=== Testes Concluídos ===")
+    append_stream(file_id, "=== Testes Concluídos ===")
 
-    # Limpar ficheiros temporários
+    # Cleanup
     if os.path.exists(script_path):
         os.remove(script_path)
-
     if os.path.exists(sandbox_dir):
         shutil.rmtree(sandbox_dir)
 
@@ -243,15 +270,12 @@ def stats():
     conn = sqlite3.connect('stats.db')
     cursor = conn.cursor()
     
-    # Estatísticas gerais
     cursor.execute("SELECT status, COUNT(*) FROM test_results GROUP BY status")
     status_counts = dict(cursor.fetchall())
     
-    # Tempo médio por teste
     cursor.execute("SELECT test_name, AVG(execution_time) FROM test_results WHERE status='PASSED' GROUP BY test_name")
     avg_times = cursor.fetchall()
     
-    # Total de submissões
     cursor.execute("SELECT COUNT(DISTINCT timestamp) FROM test_results")
     total_submissions = cursor.fetchone()[0]
     
