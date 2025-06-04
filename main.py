@@ -112,7 +112,7 @@ def stream(file_id):
     def event_stream():
         last_index = 0
         while True:
-            time.sleep(1)
+            gevent.sleep(1)
             updates = streams.get(file_id, [])[last_index:]
             for update in updates:
                 yield f"data: {update}\n\n"
@@ -227,7 +227,7 @@ def run_tests(file_id, script_path, sandbox_dir):
             conn.commit()
             conn.close()
 
-        time.sleep(0.5)
+        gevent.sleep(0.5)
 
     streams[file_id].append("=== Testes Concluídos ===")
 
