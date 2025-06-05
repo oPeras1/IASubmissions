@@ -19,7 +19,16 @@ UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Redis connection for shared state across workers
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
+try:
+    redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
+    # Test connection
+    redis_client.ping()
+    USE_REDIS = True
+except (redis.ConnectionError, redis.TimeoutError, ImportError):
+    USE_REDIS = False
+    # Fallback to in-memory storage for single worker
+    streams_lock = threading.Lock()
+    streams = {}
 
 # Remove the in-memory streams dictionary and lock
 # streams_lock = threading.Lock()  # Not needed anymore
@@ -44,23 +53,36 @@ init_db()
 
 def append_stream(file_id, msg):
     """Append message to Redis list for the given file_id"""
-    key = f"stream:{file_id}"
-    redis_client.lpush(key, msg)
-    # Set expiration to clean up old data (24 hours)
-    redis_client.expire(key, 86400)
+    if USE_REDIS:
+        key = f"stream:{file_id}"
+        redis_client.lpush(key, msg)
+        # Set expiration to clean up old data (24 hours)
+        redis_client.expire(key, 86400)
+    else:
+        # Fallback to in-memory storage
+        with streams_lock:
+            if file_id not in streams:
+                streams[file_id] = []
+            streams[file_id].append(msg)
 
 def get_stream_messages(file_id, start_index=0):
     """Get messages from Redis list starting from start_index"""
-    key = f"stream:{file_id}"
-    # Get all messages and reverse to maintain chronological order
-    messages = redis_client.lrange(key, 0, -1)
-    messages.reverse()  # Redis LPUSH adds to front, so reverse for chronological order
-    
-    # Convert bytes to strings
-    messages = [msg.decode('utf-8') for msg in messages]
-    
-    # Return messages from start_index onwards
-    return messages[start_index:]
+    if USE_REDIS:
+        key = f"stream:{file_id}"
+        # Get all messages and reverse to maintain chronological order
+        messages = redis_client.lrange(key, 0, -1)
+        messages.reverse()  # Redis LPUSH adds to front, so reverse for chronological order
+        
+        # Convert bytes to strings
+        messages = [msg.decode('utf-8') for msg in messages]
+        
+        # Return messages from start_index onwards
+        return messages[start_index:]
+    else:
+        # Fallback to in-memory storage
+        with streams_lock:
+            messages = streams.get(file_id, [])
+            return messages[start_index:]
 
 app.config['MAX_CONTENT_LENGTH'] = 102400  # bytes
 
@@ -177,7 +199,7 @@ def run_tests(file_id, script_path, sandbox_dir):
             append_stream(file_id, f"[{test_name}] ❌ Output esperado não encontrado: {output_path}")
             continue
 
-        timeout = timeout_map.get(test_name, 60)
+        timeout = timeout_map.get(test_name, 2000)
         append_stream(file_id, f"[{test_name}] Em execução com timeout={timeout}s...")
 
         try:
